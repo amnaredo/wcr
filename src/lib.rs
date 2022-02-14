@@ -14,6 +14,100 @@ pub struct Config {
     chars: bool,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct FileInfo {
+    num_lines: usize,
+    num_words: usize,
+    num_bytes: usize,
+    num_chars: usize,
+}
+
+pub fn count(mut file: impl BufRead) -> MyResult<FileInfo> {
+    let mut num_lines = 0;
+    let mut num_words = 0;
+    let mut num_bytes = 0;
+    let mut num_chars = 0;
+    let mut line = String::new();
+
+    loop {        
+        let line_bytes = file.read_line(&mut line)?;
+        if line_bytes == 0 { break; }
+        num_bytes += line_bytes;
+        num_lines += 1;
+        num_words += line.split_whitespace().count();
+        num_chars += line.chars().count();
+        line.clear();
+    }
+
+    Ok(FileInfo {
+        num_lines,
+        num_words,
+        num_bytes,
+        num_chars,
+    })
+}
+
+fn open(filename: &str) -> MyResult<Box<dyn BufRead>> {
+    match filename {
+        "-" => Ok(Box::new(BufReader::new(io::stdin()))),
+        _ => Ok(Box::new(BufReader::new(File::open(filename)?)))
+    }
+}
+
+pub fn run(config: Config) -> MyResult<()> {
+    let mut total_lines = 0;
+    let mut total_words = 0;
+    let mut total_bytes = 0;
+    let mut total_chars = 0;
+
+    for filename in &config.files {
+        match open(filename) {
+            Err(err) => eprintln!("{}: {}", filename, err),
+            Ok(file) => {
+                if let Ok(info) = count(file) {
+                    println!(
+                        "{}{}{}{}{}",
+                        format_field(info.num_lines, config.lines),
+                        format_field(info.num_words, config.words),
+                        format_field(info.num_bytes, config.bytes),
+                        format_field(info.num_chars, config.chars), 
+                        if filename.as_str() == "-" {
+                            "".to_string()
+                        } else {
+                            format!(" {}", filename)
+                        }
+                    );
+
+                    total_lines += info.num_lines;
+                    total_words += info.num_words;
+                    total_bytes += info.num_bytes;
+                    total_chars += info.num_chars;
+                }
+            }
+        }
+    }
+    
+    if config.files.len() > 1 {
+        println!(
+            "{}{}{}{} total",
+            format_field(total_lines, config.lines),
+            format_field(total_words, config.words),
+            format_field(total_bytes, config.bytes),
+            format_field(total_chars, config.chars)
+        );
+    }
+
+    Ok(())
+}
+
+fn format_field(value: usize, show: bool) -> String {
+    if show {
+        format!("{:>8}", value)
+    } else {
+        "".to_string()
+    }
+}
+
 pub fn get_args() -> MyResult<Config> {
     let matches = App::new("wcr")
         .version("0.1.0")
@@ -80,103 +174,29 @@ pub fn get_args() -> MyResult<Config> {
     })
 }
 
-fn open(filename: &str) -> MyResult<Box<dyn BufRead>> {
-    match filename {
-        "-" => Ok(Box::new(BufReader::new(io::stdin()))),
-        _ => Ok(Box::new(BufReader::new(File::open(filename)?)))
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::{count, format_field, FileInfo};
+    use std::io::Cursor;
 
-fn read_whole_lines(file: &mut Box<dyn BufRead>) -> MyResult<Vec<String>> {
-
-    let mut lines = vec!();
-
-    // read lines
-    loop {
-        let mut line = String::new();
-        let bytes = file.read_line(&mut line)?;
-        if bytes == 0 { break; }
-        lines.push(line);
-    }
-
-    Ok(lines)
-}
-
-pub fn run(config: Config) -> MyResult<()> {
-  
-    let mut total_lines_count = 0;
-    let mut total_words_count = 0;
-    let mut total_bytes_count = 0;
-    let mut total_chars_count = 0;
-    
-    for filename in &config.files {
-        match open(filename) {
-            Err(err) => eprintln!("{}: {}", filename, err),
-            Ok(mut file) => {
-                
-                // NOTE about lines() iterator:
-                // Each string returned will not have a newline byte (the 0xA byte)
-                // or CRLF (0xD, 0xA bytes) at the end.
-
-                // let lines: Vec<String> = file
-                //             .lines()
-                //             .map(|result| match result {
-                //                 Ok(line) => line,
-                //                 Err(_) => String::new(),
-                //             })
-                //             .collect();
-
-                let lines = read_whole_lines(&mut file).unwrap();
-
-                if config.lines {
-                    let lines_count = lines.len();
-                    print!("{:>6}", lines_count);
-
-                    total_lines_count += lines_count;
-                }
-                
-                if config.words {
-                    let words_count: usize = lines
-                                .iter()
-                                .map(|line| line.split_ascii_whitespace().count())
-                                .sum();
-                    print!("{:>6}", words_count);
-
-                    total_words_count += words_count;
-
-                }
-                
-                if config.bytes {
-                    let bytes_count: usize = lines
-                                .iter()
-                                .map(|line| line.bytes().count())
-                                .sum();
-                    print!("{:>6}", bytes_count);
-
-                    total_bytes_count += bytes_count;
-                }
-
-                if config.chars {
-                    let chars_count: usize = lines
-                                .iter()
-                                .map(|line| line.chars().count())
-                                .sum();
-                    print!("{:>6}", chars_count);
-
-                    total_chars_count += chars_count;
-                }
-                println!(" {}", filename);
-            }
-        }
+    #[test]
+    fn test_count() {
+        let text = "i don't want the world. I just want your half.\r\n";
+        let info = count(Cursor::new(text));
+        assert!(info.is_ok());
+        let expected = FileInfo {
+            num_lines: 1,
+            num_words: 10,
+            num_chars: 48,
+            num_bytes: 48,
+        };
+        assert_eq!(info.unwrap(), expected);
     }
 
-    if config.files.len() > 1 {
-        if config.lines { print!("{:>6}", total_lines_count)}
-        if config.words { print!("{:>6}", total_words_count)}
-        if config.bytes { print!("{:>6}", total_bytes_count)}
-        if config.chars { print!("{:>6}", total_chars_count)}
-        println!(" total");
+    #[test]
+    fn test_format_field() {
+        assert_eq!(format_field(1, false), "");
+        assert_eq!(format_field(3, true), "       3");
+        assert_eq!(format_field(10, true), "      10");
     }
-
-    Ok(())
 }
